@@ -90,3 +90,8 @@ cos:
     secretKey: xxx
     region: xxx
     bucket: xxx
+
+yuapi:
+  client:
+    access-key: d14r74q3yco0cp2j7kvlhksvszfzov39
+    secret-key: gd4cc408a6n8dspnntjqm9xc350mtyr2
