@@ -1,5 +1,6 @@
 package com.yupi.springbootinit.controller;
 
+import cn.hutool.core.io.FileUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.google.gson.Gson;
@@ -14,6 +15,7 @@ import com.yupi.springbootinit.constant.UserConstant;
 import com.yupi.springbootinit.exception.BusinessException;
 import com.yupi.springbootinit.exception.ThrowUtils;
 import com.yupi.springbootinit.manager.AiManager;
+import com.yupi.springbootinit.manager.RedisLimiterManager;
 import com.yupi.springbootinit.model.dto.chart.*;
 import com.yupi.springbootinit.model.dto.file.UploadFileRequest;
 import com.yupi.springbootinit.model.entity.Chart;
@@ -36,6 +38,8 @@ import org.springframework.web.multipart.MultipartFile;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -57,6 +61,9 @@ public class ChartController {
 
     @Resource
     private AiManager aiManager;
+
+    @Resource
+    private RedisLimiterManager redisLimiterManager;
     private final static Gson GSON = new Gson();
 
     // region 增删改查
@@ -228,8 +235,7 @@ public class ChartController {
      * @return
      */
     @PostMapping("/getChartByAi")
-    public BaseResponse<BiResponse> getChartByAi(@RequestPart("file") MultipartFile multipartFile,
-                                                 GetChartByAiRequest getChartByAiRequest, HttpServletRequest request) {
+    public BaseResponse<BiResponse> getChartByAi(@RequestPart("file") MultipartFile multipartFile, GetChartByAiRequest getChartByAiRequest, HttpServletRequest request) {
 
         User loginUser = userService.getLoginUser(request);
         ThrowUtils.throwIf(loginUser == null, ErrorCode.NOT_LOGIN_ERROR, "未登录");
@@ -239,6 +245,18 @@ public class ChartController {
         // 校验
         ThrowUtils.throwIf(StringUtils.isBlank(goal), ErrorCode.PARAMS_ERROR, "目标为空");
         ThrowUtils.throwIf(StringUtils.isNotBlank(name) && name.length() > 100, ErrorCode.PARAMS_ERROR, "名称过长");
+        // 文件校验
+        // 校验大小
+        long fileSize = multipartFile.getSize();
+        final long ONE_MB = 1024 * 1024;
+        ThrowUtils.throwIf(fileSize > ONE_MB, ErrorCode.PARAMS_ERROR, "文件过大");
+        // 校验后缀
+        List<String> suffixList = Arrays.asList("xlsx", "xls");
+        String originalFilename = multipartFile.getOriginalFilename();
+        String suffix = FileUtil.getSuffix(originalFilename);
+        ThrowUtils.throwIf(!suffixList.contains(suffix), ErrorCode.PARAMS_ERROR, "不支持此后缀的文件");
+        // 限流判断
+        redisLimiterManager.doRateLimit("getChartByAi_" + loginUser.getId().toString());
 
         // 无需写 prompt，直接调用现有模型 https://www.yucongming.com
 //        final String prompt = "你是一个数据分析师和前端开发专家，接下来我会按照以下固定格式给你提供内容：\n" +
@@ -268,9 +286,9 @@ public class ChartController {
         String result = aiManager.doChat(biModelId, userInput.toString());
         // 拆分返回值
         String[] splits = result.split("【【【【【");
-//        if (splits.length < 3) {
-//            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI 生成错误");
-//        }
+        if (splits.length < 3) {
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR, "AI 生成错误");
+        }
         String genChart = splits[1].trim();
         String genResult = splits[2].trim();
         // 保存数据到数据库
